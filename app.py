@@ -39,6 +39,7 @@ CHECK_INTERVAL_SEC = 20       # 背景檢查頻率
 # 王表清除防誤刪：請在幾秒內二次確認
 CLEAR_CONFIRM_TTL_SEC = 60
 
+
 # =========================
 # Boss 表（正式名 + 分鐘 + 別名）
 # =========================
@@ -106,8 +107,10 @@ for name, _m, aliases in BOSS_TABLE:
 # =========================
 _lock = threading.Lock()
 
+
 def now_tz() -> datetime:
     return datetime.now(TZ)
+
 
 def load_data() -> dict:
     with _lock:
@@ -119,16 +122,20 @@ def load_data() -> dict:
         except:
             return {"groups": {}, "pending_clear": {}}
 
+
 def save_data(data: dict) -> None:
     with _lock:
         with open(DATA_PATH, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
 
+
 def normalize(s: str) -> str:
     return re.sub(r"\s+", "", s.strip())
 
+
 def fmt_dt(dt: datetime) -> str:
     return dt.astimezone(TZ).strftime("%H:%M")
+
 
 def fmt_left(delta: timedelta) -> str:
     total = int(delta.total_seconds())
@@ -139,6 +146,7 @@ def fmt_left(delta: timedelta) -> str:
     if h > 0:
         return f"{h}h{m}m"
     return f"{m}m"
+
 
 def parse_hhmm(text: str) -> tuple[int, int] | None:
     t = text.strip()
@@ -159,6 +167,7 @@ def parse_hhmm(text: str) -> tuple[int, int] | None:
         if 0 <= hh <= 23 and 0 <= mm <= 59:
             return hh, mm
     return None
+
 
 def resolve_boss(query: str) -> list[str]:
     q = normalize(query)
@@ -190,9 +199,11 @@ def resolve_boss(query: str) -> list[str]:
             out.append(h)
     return out
 
+
 def ensure_group(data: dict, group_id: str) -> None:
     if group_id not in data["groups"]:
         data["groups"][group_id] = {"boss": {}, "seen_at": datetime.utcnow().isoformat()}
+
 
 def set_boss_respawn(data: dict, group_id: str, canon: str, respawn_dt: datetime) -> None:
     ensure_group(data, group_id)
@@ -201,11 +212,13 @@ def set_boss_respawn(data: dict, group_id: str, canon: str, respawn_dt: datetime
         "last_notified": ""  # 用 respawn iso 當 key，避免重複提醒
     }
 
+
 def clear_boss(data: dict, group_id: str, canon: str) -> bool:
     if group_id in data["groups"] and canon in data["groups"][group_id].get("boss", {}):
         del data["groups"][group_id]["boss"][canon]
         return True
     return False
+
 
 def list_registered(data: dict, group_id: str) -> list[tuple[str, datetime]]:
     out = []
@@ -222,6 +235,7 @@ def list_registered(data: dict, group_id: str) -> list[tuple[str, datetime]]:
         out.append((canon, dt))
     out.sort(key=lambda x: x[1])
     return out
+
 
 def should_speak(msg: str) -> bool:
     """
@@ -250,6 +264,7 @@ handler = WebhookHandler(CHANNEL_SECRET)
 
 def reply(event, text: str):
     line_bot_api.reply_message(event.reply_token, TextSendMessage(text=text))
+
 
 def push_to_group(group_id: str, text: str):
     try:
@@ -290,9 +305,8 @@ def handle_message(event):
 
     source = event.source
     group_id = getattr(source, "group_id", None)
-    user_id = getattr(source, "user_id", None)
 
-    # ✅ 我們只做「群組提醒」，所以如果不是群組訊息，仍允許查詢/教學，但不會記錄提醒目標
+    # ✅ 我們只做「群組提醒」
     in_group = bool(group_id)
 
     data = load_data()
@@ -332,7 +346,6 @@ def handle_message(event):
         lines = ["⏰【已登記 Boss 下一次重生】"]
         for canon, respawn_dt in rows:
             left = respawn_dt - now
-            # 30 分鐘內反紅提示
             mark = "🟥" if 0 <= left.total_seconds() <= WARNING_BEFORE_MIN * 60 else "🟩"
             lines.append(f"{mark} {canon} → {fmt_dt(respawn_dt)}（剩 {fmt_left(left)}）")
 
@@ -357,7 +370,6 @@ def handle_message(event):
         if not ts or (time.time() - ts) > CLEAR_CONFIRM_TTL_SEC:
             reply(event, "⏳ 已超時，請重新輸入：王表清除")
             return
-        # 清空
         data["groups"][group_id]["boss"] = {}
         data["pending_clear"].pop(group_id, None)
         save_data(data)
@@ -387,15 +399,13 @@ def handle_message(event):
         return
 
     # --- 解析：指定重生（...出） or 死亡時間（沒出）---
-    # 支援：Boss1400出 / Boss 14:00出 / Boss1400 / Boss 14:00
     m = re.match(r"^(.*?)(\d{1,2}:\d{2}|\d{3,4})(出)?$", text)
     if not m:
-        # 不是指令也不是時間登記，就沉默（避免刷屏）
         return
 
     boss_key = m.group(1)
     time_str = m.group(2)
-    is_respawn_mark = bool(m.group(3))  # 有「出」代表指定重生
+    is_respawn_mark = bool(m.group(3))
 
     hhmm = parse_hhmm(time_str)
     if not hhmm:
@@ -420,13 +430,10 @@ def handle_message(event):
         reply(event, "⚠️ 請在群組使用登記（死亡/指定重生），我才會對該群組做提醒。")
         return
 
-    # 以「今天 HH:MM」為基準
     base = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
 
     if is_respawn_mark:
-        # ✅ 指定重生：時間就是下一次重生，不會先 + 週期
         respawn_dt = base
-        # 如果輸入時間已經過了，就往後推週期直到在未來
         while respawn_dt <= now:
             respawn_dt += timedelta(minutes=respawn_min)
 
@@ -440,14 +447,11 @@ def handle_message(event):
               f"（重生前 {REMIND_BEFORE_MIN} 分鐘提醒）")
         return
     else:
-        # ✅ 死亡時間：先視為死亡時間 → + 週期算重生
         death_dt = base
-        # 若死亡時間在未來（例如你打錯），就往前一天，避免怪異
         if death_dt > now + timedelta(minutes=1):
             death_dt -= timedelta(days=1)
 
         respawn_dt = death_dt + timedelta(minutes=respawn_min)
-        # 如果算出來已經過了，就往後推週期到未來
         while respawn_dt <= now:
             respawn_dt += timedelta(minutes=respawn_min)
 
@@ -510,7 +514,6 @@ def reminder_loop():
                     if 0 < left.total_seconds() <= REMIND_BEFORE_MIN * 60:
                         key = respawn_dt.isoformat()
                         if rec.get("last_notified", "") != key:
-                            # 🟥 提醒
                             msg = (
                                 f"🔔快重生啦！\n"
                                 f"⏳ 剩餘：{fmt_left(left)}\n"
@@ -529,9 +532,6 @@ def reminder_loop():
         time.sleep(CHECK_INTERVAL_SEC)
 
 
-# =========================
-# 啟動
-# =========================
 threading.Thread(target=reminder_loop, daemon=True).start()
 
 if __name__ == "__main__":
