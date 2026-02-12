@@ -17,7 +17,7 @@ from linebot.models import MessageEvent, TextMessage, TextSendMessage
 # =========================
 CHANNEL_ACCESS_TOKEN = os.getenv("CHANNEL_ACCESS_TOKEN", "").strip()
 CHANNEL_SECRET = os.getenv("CHANNEL_SECRET", "").strip()
-TZ_NAME = os.getenv("TZ", "Asia/Taipei").strip()  # 你 Render 已設 Asia/Taipei
+TZ_NAME = os.getenv("TZ", "Asia/Taipei").strip()
 
 if not CHANNEL_ACCESS_TOKEN or not CHANNEL_SECRET:
     raise RuntimeError("Missing CHANNEL_ACCESS_TOKEN or CHANNEL_SECRET in environment variables.")
@@ -36,16 +36,16 @@ DATA_DIR = os.getenv("DATA_DIR", "/var/data")
 os.makedirs(DATA_DIR, exist_ok=True)
 DATA_PATH = os.path.join(DATA_DIR, "boss_data.json")
 
-# 用來做「王表清除」二次確認
 PENDING_CLEAR_PATH = os.path.join(DATA_DIR, "pending_clear.json")
 
 REMIND_BEFORE_MIN = 5
+WARNING_BEFORE_MIN = 30          # ✅ 30 分鐘反紅
+EXPIRE_GRACE_MIN = 1             # ✅ 超過重生 +1 分鐘就自動清除
 CHECK_INTERVAL_SEC = 20
 
 
 # =========================
 # Boss 表（正式名 + 分鐘 + 別名）
-# 括號內是別名：可輸入但查詢不顯示
 # =========================
 BOSS_TABLE = [
     ("巨大鱷魚", 60, ["鱷魚"]),
@@ -96,7 +96,6 @@ BOSS_TABLE = [
 
 BOSS_RESPAWN_MIN = {name: mins for (name, mins, _) in BOSS_TABLE}
 
-# 別名 → 正式名（也把正式名自己映射回去）
 ALIAS_TO_OFFICIAL = {}
 OFFICIAL_NAMES = []
 for name, mins, aliases in BOSS_TABLE:
@@ -148,16 +147,12 @@ def fmt_hhmm(dt: datetime) -> str:
     return dt.astimezone(TZ).strftime("%H:%M")
 
 def parse_hhmm(s: str):
-    # 支援 0000~2359（含前導0）
     m = re.fullmatch(r"([01]\d|2[0-3])([0-5]\d)", s)
     if not m:
         return None
-    hh = int(m.group(1))
-    mm = int(m.group(2))
-    return hh, mm
+    return int(m.group(1)), int(m.group(2))
 
 def ensure_future(dt: datetime) -> datetime:
-    # 如果輸入時間比現在早很多（例如過了），就推到明天同一時間
     n = now_tz()
     if dt < n - timedelta(minutes=1):
         dt = dt + timedelta(days=1)
@@ -167,37 +162,45 @@ def compute_next_respawn_from_death(boss: str, death_dt: datetime) -> datetime:
     mins = BOSS_RESPAWN_MIN[boss]
     return death_dt + timedelta(minutes=mins)
 
-def compute_remaining(respawn_dt: datetime) -> str:
+def remaining_minutes(respawn_dt: datetime) -> int:
     n = now_tz()
     diff = respawn_dt - n
-    if diff.total_seconds() <= 0:
+    return int(diff.total_seconds() // 60)
+
+def compute_remaining_str(respawn_dt: datetime) -> str:
+    mins = remaining_minutes(respawn_dt)
+    if mins <= 0:
         return "00h00m"
-    total_min = int(diff.total_seconds() // 60)
-    h = total_min // 60
-    m = total_min % 60
+    h = mins // 60
+    m = mins % 60
     return f"{h:02d}h{m:02d}m"
 
+def urgency_badge(respawn_dt: datetime) -> str:
+    mins = remaining_minutes(respawn_dt)
+    # ✅ 30 分鐘內反紅
+    if mins <= 0:
+        return "✅"  # 到點了（但通常會自動清除）
+    if mins <= REMIND_BEFORE_MIN:
+        return "🟥🟥🔔"
+    if mins <= WARNING_BEFORE_MIN:
+        return "🟥"
+    return "🟩"
+
 def normalize_text(t: str) -> str:
-    # 去掉全形空白、前後空白
     t = t.replace("　", " ").strip()
-    # 連續空白壓成1個
     t = re.sub(r"\s+", " ", t)
     return t
 
 
 # =========================
 # Boss 模糊搜尋
-# - 命中 1 個：回傳官方名
-# - 命中多個：回傳列表
 # =========================
 def match_boss(keyword: str):
     keyword = keyword.strip()
     if not keyword:
         return None, []
-    # 1) 先看別名/正式名完全相等
     if keyword in ALIAS_TO_OFFICIAL:
         return ALIAS_TO_OFFICIAL[keyword], []
-    # 2) 再做包含式模糊（官方名、別名都比）
     hits = set()
     for alias, official in ALIAS_TO_OFFICIAL.items():
         if keyword in alias:
@@ -210,12 +213,9 @@ def match_boss(keyword: str):
     return None, []
 
 
-# =========================
-# 指令說明（✨加一點表情）
-# =========================
 HELP_TEXT = """✨【可用指令】✨
 1) 王 😈：列出所有 Boss 名稱（只顯示正式名）
-2) 王出 ⏰：只顯示「已登記」的 Boss 下一次重生
+2) 王出 ⏰：只顯示「已登記」的 Boss 下一次重生（30 分鐘內🟥）
 3) 死亡時間 ☠️：Boss1430 / Boss 1430
    → 代表 Boss 14:30 死亡，會自動算下一次重生
 4) 指定重生 🐣：Boss1400出 / Boss 1400出
@@ -228,15 +228,7 @@ HELP_TEXT = """✨【可用指令】✨
 """
 
 
-# =========================
-# 解析訊息：支援
-# - Boss1430
-# - Boss 1430
-# - Boss1430出
-# - Boss 1430出
-# - Boss清除 / Boss 清除
-# =========================
-TIME_RE = re.compile(r"^(?P<boss>.+?)[ ]*(?P<time>(?:[01]\d|2[0-3])[0-5]\d)(?P<out>出)?$")  # 0100 OK
+TIME_RE = re.compile(r"^(?P<boss>.+?)[ ]*(?P<time>(?:[01]\d|2[0-3])[0-5]\d)(?P<out>出)?$")
 DEATH_SPLIT_RE = re.compile(r"^(?P<boss>.+?)[ ]*(?P<time>(?:[01]\d|2[0-3])[0-5]\d)$")
 CLEAR_ONE_RE = re.compile(r"^(?P<boss>.+?)[ ]*清除$")
 
@@ -245,9 +237,6 @@ def reply_text(token: str, text: str):
     line_bot_api.reply_message(token, TextSendMessage(text=text))
 
 
-# =========================
-# Webhook
-# =========================
 @app.route("/callback", methods=["POST"])
 def callback():
     signature = request.headers.get("X-Line-Signature", "")
@@ -266,12 +255,7 @@ def handle_message(event: MessageEvent):
     text_raw = event.message.text or ""
     text = normalize_text(text_raw)
 
-    # ✅ 沒打到關鍵字就不要回（避免群組被洗版）
-    # 只有以下情況才處理：
-    # - 王 / 王出 / 查詢
-    # - 王表清除 / 王表確認
-    # - Boss清除
-    # - Boss時間（含出）
+    # ✅ 沒打到關鍵字就不要回（避免洗版）
     is_candidate = (
         text in ["王", "王出", "查詢", "王表清除", "王表確認"]
         or CLEAR_ONE_RE.match(text) is not None
@@ -281,12 +265,10 @@ def handle_message(event: MessageEvent):
     if not is_candidate:
         return
 
-    # 1) 查詢
     if text == "查詢":
         reply_text(event.reply_token, HELP_TEXT)
         return
 
-    # 2) 王：列出正式名
     if text == "王":
         msg = "😈【Boss 清單】😈\n" + "\n".join([f"・{n}" for n in OFFICIAL_NAMES])
         reply_text(event.reply_token, msg)
@@ -295,7 +277,6 @@ def handle_message(event: MessageEvent):
     with LOCK:
         data = load_data()
 
-    # 3) 王出：只顯示已登記時間的王
     if text == "王出":
         boss_data = data.get("boss", {})
         items = []
@@ -304,9 +285,14 @@ def handle_message(event: MessageEvent):
             if not respawn_iso:
                 continue
             try:
-                respawn_dt = datetime.fromisoformat(respawn_iso)
+                respawn_dt = datetime.fromisoformat(respawn_iso).astimezone(TZ)
             except:
                 continue
+
+            # ✅ 如果已過期（理論上背景會清掉），這裡也做一次保險：略過
+            if now_tz() > respawn_dt + timedelta(minutes=EXPIRE_GRACE_MIN):
+                continue
+
             items.append((boss, respawn_dt))
 
         if not items:
@@ -316,11 +302,11 @@ def handle_message(event: MessageEvent):
         items.sort(key=lambda x: x[1])
         lines = ["⏰【已登記王出】⏰"]
         for boss, respawn_dt in items:
-            lines.append(f"・{boss}：{fmt_hhmm(respawn_dt)}（剩 {compute_remaining(respawn_dt)}）")
+            badge = urgency_badge(respawn_dt)
+            lines.append(f"{badge} {boss}：{fmt_hhmm(respawn_dt)}（剩 {compute_remaining_str(respawn_dt)}）")
         reply_text(event.reply_token, "\n".join(lines))
         return
 
-    # 4) 王表清除（需要二次確認）
     if text == "王表清除":
         pending = load_pending_clear()
         key = str(event.source.group_id or event.source.user_id or "default")
@@ -347,7 +333,6 @@ def handle_message(event: MessageEvent):
             reply_text(event.reply_token, "⏳ 超過 2 分鐘，已取消清空。")
             return
 
-        # 清空
         with LOCK:
             data = load_data()
             data["boss"] = {}
@@ -358,7 +343,6 @@ def handle_message(event: MessageEvent):
         reply_text(event.reply_token, "✅ 王表已清空完成！")
         return
 
-    # 5) 清除單隻：Boss清除 / Boss 清除
     m_clear = CLEAR_ONE_RE.match(text)
     if m_clear:
         boss_kw = m_clear.group("boss").strip()
@@ -383,13 +367,10 @@ def handle_message(event: MessageEvent):
                 reply_text(event.reply_token, f"🧹 {official} 本來就沒有登記時間")
         return
 
-    # 6) 時間指令（死亡 or 指定重生）
     m = TIME_RE.match(text)
     if not m:
-        # 可能是死亡時間（沒有出）
         m2 = DEATH_SPLIT_RE.match(text)
         if not m2:
-            # 理論上不會到這（因為前面已 candidate）
             return
         boss_kw = m2.group("boss").strip()
         hhmm = m2.group("time")
@@ -423,7 +404,6 @@ def handle_message(event: MessageEvent):
         boss_data = data.get("boss", {})
 
         if is_out:
-            # 指定重生：先記下「重生點」，不先加週期
             respawn_dt = base_dt
             boss_data[official] = {
                 "respawn": respawn_dt.isoformat(),
@@ -433,14 +413,14 @@ def handle_message(event: MessageEvent):
             data["boss"] = boss_data
             save_data(data)
 
+            badge = urgency_badge(respawn_dt)
             reply_text(
                 event.reply_token,
-                f"🐣 已設定重生時間：{fmt_hhmm(respawn_dt)}\n"
-                f"⏳ 剩 {compute_remaining(respawn_dt)}（重生前 {REMIND_BEFORE_MIN} 分鐘提醒）"
+                f"{badge} 🐣 已設定重生：{fmt_hhmm(respawn_dt)}\n"
+                f"⏳ 剩 {compute_remaining_str(respawn_dt)}（前 {REMIND_BEFORE_MIN} 分鐘提醒）"
             )
             return
 
-        # 死亡時間：自動 + 週期
         death_dt = base_dt
         respawn_dt = compute_next_respawn_from_death(official, death_dt)
         boss_data[official] = {
@@ -451,16 +431,17 @@ def handle_message(event: MessageEvent):
         data["boss"] = boss_data
         save_data(data)
 
+    badge = urgency_badge(respawn_dt)
     reply_text(
         event.reply_token,
         f"☠️ 已登記死亡：{fmt_hhmm(death_dt)}\n"
-        f"⏰ 下一次重生：{fmt_hhmm(respawn_dt)}\n"
-        f"⏳ 剩 {compute_remaining(respawn_dt)}（重生前 {REMIND_BEFORE_MIN} 分鐘提醒）"
+        f"{badge} ⏰ 下一次重生：{fmt_hhmm(respawn_dt)}\n"
+        f"⏳ 剩 {compute_remaining_str(respawn_dt)}（前 {REMIND_BEFORE_MIN} 分鐘提醒）"
     )
 
 
 # =========================
-# 背景提醒（單 worker 很重要）
+# 推播目標（群組/個人）
 # =========================
 def push_to_targets(text: str):
     with LOCK:
@@ -474,7 +455,6 @@ def push_to_targets(text: str):
             pass
 
 def ensure_targets(event):
-    # 讓機器人記住「要推播到哪」
     tid = None
     if event.source.type == "group":
         tid = event.source.group_id
@@ -496,12 +476,15 @@ def ensure_targets(event):
 
 @handler.add(MessageEvent)
 def handle_any_event(event):
-    # 每次有事件就記錄目標（群組/個人）
     try:
         ensure_targets(event)
     except:
         pass
 
+
+# =========================
+# 背景提醒 + 過期自動清除
+# =========================
 def reminder_loop():
     while True:
         try:
@@ -526,6 +509,12 @@ def reminder_loop():
                 except:
                     continue
 
+                # ✅ 超過重生時間後自動清除（+1分鐘緩衝）
+                if n > respawn_dt + timedelta(minutes=EXPIRE_GRACE_MIN):
+                    boss_data.pop(boss, None)
+                    changed = True
+                    continue
+
                 remind_at = respawn_dt - timedelta(minutes=REMIND_BEFORE_MIN)
 
                 # 到提醒區間：推一次
@@ -533,17 +522,13 @@ def reminder_loop():
                     key = respawn_dt.isoformat()
                     if rec.get("last_notified", "") != key:
                         msg = (
-                            f"🔔【快重生】{boss}\n"
-                            f"⏰ {fmt_hhmm(respawn_dt)}（剩 {compute_remaining(respawn_dt)}）"
+                            f"🟥🟥🔔【快重生】{boss}\n"
+                            f"⏰ {fmt_hhmm(respawn_dt)}（剩 {compute_remaining_str(respawn_dt)}）"
                         )
                         push_to_targets(msg)
                         rec["last_notified"] = key
                         boss_data[boss] = rec
                         changed = True
-
-                # 如果已經過了重生點，就不自動往後推
-                # （你要求：指定重生不往後推；死亡時間才會往後推，但那是你下一次再登記死亡）
-                # 所以這裡不做任何「自動+週期」避免亂跳
 
             if changed:
                 with LOCK:
@@ -559,11 +544,11 @@ def reminder_loop():
 
 threading.Thread(target=reminder_loop, daemon=True).start()
 
-# 健康檢查
+
 @app.route("/", methods=["GET"])
 def health():
     return "OK", 200
 
+
 if __name__ == "__main__":
-    # 本機測試用
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
