@@ -32,15 +32,15 @@ handler = WebhookHandler(CHANNEL_SECRET)
 # =========================
 # 資料儲存（Render 建議掛 Persistent Disk 到 /var/data）
 # =========================
-DATA_DIR = os.getenv("DATA_DIR", "/var/data")
+DATA_DIR = os.getenv("DATA_DIR", "data")
 os.makedirs(DATA_DIR, exist_ok=True)
 DATA_PATH = os.path.join(DATA_DIR, "boss_data.json")
-
 PENDING_CLEAR_PATH = os.path.join(DATA_DIR, "pending_clear.json")
+
 
 REMIND_BEFORE_MIN = 5
 WARNING_BEFORE_MIN = 30          # ✅ 30 分鐘反紅
-EXPIRE_GRACE_MIN = 1             # ✅ 超過重生 +1 分鐘就自動清除
+EXPIRE_GRACE_MIN = 3             # ✅ 超過重生 +3 分鐘就自動清除
 CHECK_INTERVAL_SEC = 20
 
 
