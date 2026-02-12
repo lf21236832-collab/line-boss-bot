@@ -24,6 +24,7 @@ if not CHANNEL_ACCESS_TOKEN or not CHANNEL_SECRET:
 
 TZ_NAME = os.getenv("TZ", "Asia/Taipei").strip()
 TZ = ZoneInfo(TZ_NAME)
+APP_VERSION = "v2026-02-13-0715"
 
 DATA_DIR = os.getenv("DATA_DIR", "data")  # ✅ 雲端版：相對路徑，不碰 /var/data
 os.makedirs(DATA_DIR, exist_ok=True)
@@ -277,6 +278,8 @@ def push_to_group(group_id: str, text: str):
 # 指令文字
 # =========================
 HELP_TEXT = (
+    f"🛠 天堂王表機器人 {APP_VERSION}\n"
+    "──────────────────\n"
     "✨【可用指令】✨\n"
     "1) 王 😈：列出所有 Boss 名稱（只顯示正式名）\n"
     "2) 王出 ⏰：只顯示「已登記」的 Boss 下一次重生\n"
