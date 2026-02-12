@@ -396,7 +396,7 @@ def handle_message(event):
         ok = clear_boss(data, group_id, canon)
         save_data(data)
         if ok:
-            reply(event, f"🧹已清除。")
+            reply(event, f"🧹【{canon}】已清除。")
         else:
             reply(event, f"📭本來就沒有登記。")
         return
@@ -444,7 +444,7 @@ def handle_message(event):
         save_data(data)
 
         reply(event,
-              f"🐣指定重生已登記\n"
+              f"🐣【{canon}】指定重生已登記\n"
               f"下一次重生：{fmt_dt(respawn_dt)}\n"
               f"剩餘：{fmt_left(respawn_dt - now)}\n"
               f"（重生前 {REMIND_BEFORE_MIN} 分鐘提醒）")
@@ -462,11 +462,11 @@ def handle_message(event):
         save_data(data)
 
         reply(event,
-              f"☠️死亡時間已登記\n"
+              f"☠️【{canon}】死亡時間已登記\n"
               f"下一次重生：{fmt_dt(respawn_dt)}\n"
               f"剩餘：{fmt_left(respawn_dt - now)}\n"
               f"（重生前 {REMIND_BEFORE_MIN} 分鐘提醒）")
-        return
+
 
 
 # =========================
@@ -518,7 +518,7 @@ def reminder_loop():
                         key = respawn_dt.isoformat()
                         if rec.get("last_notified", "") != key:
                             msg = (
-                                f"🔔快重生啦！\n"
+                                f"🔔【{canon}】快重生啦！\n"
                                 f"⏳ 剩餘：{fmt_left(left)}\n"
                                 f"🕒 重生：{fmt_dt(respawn_dt)}"
                             )
