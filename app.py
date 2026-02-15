@@ -237,7 +237,7 @@ def should_speak(msg: str) -> bool:
     - 登記：含時間（HHMM或HH:MM）
     """
     m = normalize(msg)
-    if m in ["查詢", "王", "王出", "王表清除", "王表確認清除"]:
+    if m in ["查詢", "王", "王出", "王表清除", "王表確認清除", "群組ID"]:
         return True
     if m.endswith("清除"):
         return True
