@@ -14,6 +14,12 @@ from linebot.models import MessageEvent, TextMessage, TextSendMessage
 
 
 # =========================
+# 版本號
+# =========================
+VERSION = "v2026-02-14-0815"  # ✅ 你要的：0214-完成時間（0815可自行改成你完成的HHMM）
+
+
+# =========================
 # 基本設定
 # =========================
 CHANNEL_ACCESS_TOKEN = os.getenv("CHANNEL_ACCESS_TOKEN", "").strip()
@@ -24,9 +30,8 @@ if not CHANNEL_ACCESS_TOKEN or not CHANNEL_SECRET:
 
 TZ_NAME = os.getenv("TZ", "Asia/Taipei").strip()
 TZ = ZoneInfo(TZ_NAME)
-APP_VERSION = "v2026-02-13-0715"
 
-DATA_DIR = os.getenv("DATA_DIR", "data")  # ✅ 雲端版：相對路徑，不碰 /var/data
+DATA_DIR = os.getenv("DATA_DIR", "data")  # ✅ 雲端版：相對路徑
 os.makedirs(DATA_DIR, exist_ok=True)
 
 DATA_PATH = os.path.join(DATA_DIR, "boss_data.json")
@@ -108,10 +113,8 @@ for name, _m, aliases in BOSS_TABLE:
 # =========================
 _lock = threading.Lock()
 
-
 def now_tz() -> datetime:
     return datetime.now(TZ)
-
 
 def load_data() -> dict:
     with _lock:
@@ -123,20 +126,16 @@ def load_data() -> dict:
         except:
             return {"groups": {}, "pending_clear": {}}
 
-
 def save_data(data: dict) -> None:
     with _lock:
         with open(DATA_PATH, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
 
-
 def normalize(s: str) -> str:
-    return re.sub(r"\s+", "", s.strip())
-
+    return re.sub(r"\s+", "", (s or "").strip())
 
 def fmt_dt(dt: datetime) -> str:
     return dt.astimezone(TZ).strftime("%H:%M")
-
 
 def fmt_left(delta: timedelta) -> str:
     total = int(delta.total_seconds())
@@ -148,13 +147,11 @@ def fmt_left(delta: timedelta) -> str:
         return f"{h}h{m}m"
     return f"{m}m"
 
-
 def parse_hhmm(text: str) -> tuple[int, int] | None:
-    t = text.strip()
+    t = (text or "").strip()
     if re.fullmatch(r"\d{1,2}:\d{2}", t):
         hh, mm = t.split(":")
-        hh = int(hh)
-        mm = int(mm)
+        hh = int(hh); mm = int(mm)
         if 0 <= hh <= 23 and 0 <= mm <= 59:
             return hh, mm
         return None
@@ -168,7 +165,6 @@ def parse_hhmm(text: str) -> tuple[int, int] | None:
         if 0 <= hh <= 23 and 0 <= mm <= 59:
             return hh, mm
     return None
-
 
 def resolve_boss(query: str) -> list[str]:
     q = normalize(query)
@@ -200,11 +196,9 @@ def resolve_boss(query: str) -> list[str]:
             out.append(h)
     return out
 
-
 def ensure_group(data: dict, group_id: str) -> None:
     if group_id not in data["groups"]:
         data["groups"][group_id] = {"boss": {}, "seen_at": datetime.utcnow().isoformat()}
-
 
 def set_boss_respawn(data: dict, group_id: str, canon: str, respawn_dt: datetime) -> None:
     ensure_group(data, group_id)
@@ -213,13 +207,11 @@ def set_boss_respawn(data: dict, group_id: str, canon: str, respawn_dt: datetime
         "last_notified": ""  # 用 respawn iso 當 key，避免重複提醒
     }
 
-
 def clear_boss(data: dict, group_id: str, canon: str) -> bool:
     if group_id in data["groups"] and canon in data["groups"][group_id].get("boss", {}):
         del data["groups"][group_id]["boss"][canon]
         return True
     return False
-
 
 def list_registered(data: dict, group_id: str) -> list[tuple[str, datetime]]:
     out = []
@@ -236,7 +228,6 @@ def list_registered(data: dict, group_id: str) -> list[tuple[str, datetime]]:
         out.append((canon, dt))
     out.sort(key=lambda x: x[1])
     return out
-
 
 def should_speak(msg: str) -> bool:
     """
@@ -262,10 +253,8 @@ app = Flask(__name__)
 line_bot_api = LineBotApi(CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(CHANNEL_SECRET)
 
-
 def reply(event, text: str):
     line_bot_api.reply_message(event.reply_token, TextSendMessage(text=text))
-
 
 def push_to_group(group_id: str, text: str):
     try:
@@ -278,7 +267,8 @@ def push_to_group(group_id: str, text: str):
 # 指令文字
 # =========================
 HELP_TEXT = (
-    f"🛠 天堂王表機器人 {APP_VERSION}\n"
+    f"🛠 天堂王表機器人\n"
+    f"{VERSION}\n"
     "──────────────────\n"
     "✨【可用指令】✨\n"
     "1) 王 😈：列出所有 Boss 名稱（只顯示正式名）\n"
@@ -309,7 +299,7 @@ def handle_message(event):
     source = event.source
     group_id = getattr(source, "group_id", None)
 
-    # ✅ 我們只做「群組提醒」
+    # ✅ 只做「群組提醒」：私訊可查詢但不記錄提醒目標
     in_group = bool(group_id)
 
     data = load_data()
@@ -396,19 +386,20 @@ def handle_message(event):
         ok = clear_boss(data, group_id, canon)
         save_data(data)
         if ok:
-            reply(event, f"🧹【{canon}】已清除。")
+            reply(event, f"🧹已清除。")
         else:
             reply(event, f"📭本來就沒有登記。")
         return
 
     # --- 解析：指定重生（...出） or 死亡時間（沒出）---
+    # 支援：Boss1400出 / Boss 14:00出 / Boss1400 / Boss 14:00
     m = re.match(r"^(.*?)(\d{1,2}:\d{2}|\d{3,4})(出)?$", text)
     if not m:
         return
 
     boss_key = m.group(1)
     time_str = m.group(2)
-    is_respawn_mark = bool(m.group(3))
+    is_respawn_mark = bool(m.group(3))  # 有「出」代表指定重生
 
     hhmm = parse_hhmm(time_str)
     if not hhmm:
@@ -444,7 +435,7 @@ def handle_message(event):
         save_data(data)
 
         reply(event,
-              f"🐣【{canon}】指定重生已登記\n"
+              f"🐣指定重生已登記\n"
               f"下一次重生：{fmt_dt(respawn_dt)}\n"
               f"剩餘：{fmt_left(respawn_dt - now)}\n"
               f"（重生前 {REMIND_BEFORE_MIN} 分鐘提醒）")
@@ -462,11 +453,11 @@ def handle_message(event):
         save_data(data)
 
         reply(event,
-              f"☠️【{canon}】死亡時間已登記\n"
+              f"☠️死亡時間已登記\n"
               f"下一次重生：{fmt_dt(respawn_dt)}\n"
               f"剩餘：{fmt_left(respawn_dt - now)}\n"
               f"（重生前 {REMIND_BEFORE_MIN} 分鐘提醒）")
-
+        return
 
 
 # =========================
@@ -489,6 +480,13 @@ def callback():
 # 背景提醒任務（群組推播）
 # =========================
 def reminder_loop():
+    """
+    ✅ 修正重點：5 分鐘提醒「不會漏」
+    原本用 0 < left <= 300 太嚴格，loop若剛好延遲/重啟跨過0秒會直接錯過。
+    現在加入 tolerance，允許小幅負秒數也補發一次（仍用 last_notified 防止重複）。
+    """
+    tolerance = CHECK_INTERVAL_SEC * 2  # 例如 40 秒容錯
+
     while True:
         try:
             data = load_data()
@@ -512,13 +510,15 @@ def reminder_loop():
                         changed = True
                         continue
 
-                    # 2) 5 分鐘提醒（只提醒一次）
+                    # 2) 5 分鐘提醒（只提醒一次，且容錯避免漏）
                     left = respawn_dt - now
-                    if 0 < left.total_seconds() <= REMIND_BEFORE_MIN * 60:
+                    left_sec = left.total_seconds()
+
+                    if -tolerance <= left_sec <= REMIND_BEFORE_MIN * 60:
                         key = respawn_dt.isoformat()
                         if rec.get("last_notified", "") != key:
                             msg = (
-                                f"🔔【{canon}】快重生啦！\n"
+                                f"🔔快重生啦！\n"
                                 f"⏳ 剩餘：{fmt_left(left)}\n"
                                 f"🕒 重生：{fmt_dt(respawn_dt)}"
                             )
@@ -535,6 +535,9 @@ def reminder_loop():
         time.sleep(CHECK_INTERVAL_SEC)
 
 
+# =========================
+# 啟動
+# =========================
 threading.Thread(target=reminder_loop, daemon=True).start()
 
 if __name__ == "__main__":
