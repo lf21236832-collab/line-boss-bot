@@ -458,6 +458,14 @@ def handle_message(event):
               f"剩餘：{fmt_left(respawn_dt - now)}\n"
               f"（重生前 {REMIND_BEFORE_MIN} 分鐘提醒）")
         return
+# 測試用：取得群組ID
+if text == "群組ID":
+    group_id = getattr(event.source, "group_id", None)
+    user_id = getattr(event.source, "user_id", None)
+
+    reply(event,
+          f"Group ID:\n{group_id}\n\nUser ID:\n{user_id}")
+    return
 
 
 # =========================
